@@ -102,6 +102,81 @@ func createCommandInfo(req *models.CommandRequest) (*CommandInfo, error) {
 	}, nil
 }
 
+func getReqStartingAddr(req models.CommandRequest) (uint16, error) {
+	if _, ok := req.Attributes[STARTING_ADDRESS]; !ok {
+		return 0, errors.NewCommonEdgeX(errors.KindContractInvalid, fmt.Sprintf("attribute %s not exists", STARTING_ADDRESS), nil)
+	}
+
+	startingAddress, err := castStartingAddress(req.Attributes[STARTING_ADDRESS])
+	if err != nil {
+		return 0, errors.NewCommonEdgeX(errors.Kind(err), fmt.Sprintf("fail to cast %s", STARTING_ADDRESS), err)
+	}
+
+	return startingAddress, nil
+}
+
+func createCommandInfoForReqs(primaryTable string, reqs []models.CommandRequest, sortedReqIdxList []int) (cmd *CommandInfo, err error) {
+
+	// pre check
+	if len(reqs) < len(sortedReqIdxList) || len(sortedReqIdxList) == 0 {
+		return nil, errors.NewCommonEdgeX(errors.KindOverflowError, fmt.Sprintf("error reqs len %d , or sortedReqIdxList len %d", len(sortedReqIdxList), len(reqs)), nil)
+	}
+
+	// get max-startingAddr-req
+	maxStartingAddrReqIdx := sortedReqIdxList[len(sortedReqIdxList)-1]
+	if maxStartingAddrReqIdx >= len(reqs) {
+		return nil, errors.NewCommonEdgeX(errors.KindOverflowError, fmt.Sprintf("error reqs idx %d for reqs len %d", maxStartingAddrReqIdx, len(reqs)), nil)
+	}
+	maxStartingAddrReq := reqs[maxStartingAddrReqIdx]
+
+	// get max-startingAddr-req
+	minStartingAddrReqIdx := sortedReqIdxList[0]
+	if minStartingAddrReqIdx >= len(reqs) {
+		return nil, errors.NewCommonEdgeX(errors.KindOverflowError, fmt.Sprintf("error reqs idx %d for reqs len %d", minStartingAddrReqIdx, len(reqs)), nil)
+	}
+	minStartingAddrReq := reqs[minStartingAddrReqIdx]
+
+	// get max-startingAddr-req's length
+	var rawType = maxStartingAddrReq.Type
+	if _, ok := maxStartingAddrReq.Attributes[RAW_TYPE]; ok {
+		rawType = fmt.Sprintf("%v", maxStartingAddrReq.Attributes[RAW_TYPE])
+		rawType, err = normalizeRawType(rawType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var maxReqLength uint16
+	if maxStartingAddrReq.Type == common.ValueTypeString {
+		maxReqLength, err = castStartingAddress(maxStartingAddrReq.Attributes[STRING_REGISTER_SIZE])
+		if err != nil {
+			return nil, err
+		} else if (maxReqLength > 123) || (maxReqLength < 1) {
+			return nil, errors.NewCommonEdgeX(errors.KindLimitExceeded, fmt.Sprintf("register size should be within the range of 1~123, get %v.", maxReqLength), nil)
+		}
+	} else {
+		maxReqLength = calculateAddressLength(primaryTable, rawType)
+	}
+
+	// length = (maxReqStartingAddr + maxReqLength) - minReqStartingAddr
+	maxReqStartingAddr, err := getReqStartingAddr(maxStartingAddrReq)
+	if err != nil {
+		return nil, errors.NewCommonEdgeX(errors.KindLimitExceeded, fmt.Sprintf("getReqStartingAddr %d", maxReqStartingAddr), err)
+	}
+	minReqStartingAddr, err := getReqStartingAddr(minStartingAddrReq)
+	if err != nil {
+		return nil, errors.NewCommonEdgeX(errors.KindLimitExceeded, fmt.Sprintf("getReqStartingAddr %d", maxReqStartingAddr), err)
+	}
+
+	length := (maxReqStartingAddr + maxReqLength) - minReqStartingAddr
+
+	return &CommandInfo{
+		PrimaryTable:    primaryTable,
+		ValueType:       common.ValueTypeString, // set to string
+		StartingAddress: minReqStartingAddr,
+		Length:          length,
+	}, nil
+}
+
 func calculateAddressLength(primaryTable string, valueType string) uint16 {
 	var primaryTableBit = PrimaryTableBitCountMap[primaryTable]
 	var valueTypeBitCount = ValueTypeBitCountMap[valueType]

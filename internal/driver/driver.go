@@ -8,13 +8,17 @@
 package driver
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/edgexfoundry/device-sdk-go/v3/pkg/interfaces"
 	sdkModel "github.com/edgexfoundry/device-sdk-go/v3/pkg/models"
 	"github.com/edgexfoundry/go-mod-core-contracts/v3/clients/logger"
+	"github.com/edgexfoundry/go-mod-core-contracts/v3/errors"
 	"github.com/edgexfoundry/go-mod-core-contracts/v3/models"
 )
 
@@ -88,6 +92,11 @@ func (d *Driver) lockableAddress(info *ConnectionInfo) string {
 	return address
 }
 
+/*
+	1. reqs 根据 primary table 分类合并，获取数据
+	2. 返回时保持数据原始的格式
+*/
+
 func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]models.ProtocolProperties, reqs []sdkModel.CommandRequest) (responses []*sdkModel.CommandValue, err error) {
 	connectionInfo, err := createConnectionInfo(protocols)
 	if err != nil {
@@ -118,16 +127,107 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 	}
 
 	defer func() { _ = deviceClient.CloseConnection() }()
+	bys, _ := json.Marshal(reqs)
 
-	// handle command requests
+	fmt.Println("\n---------------------------------------------\n")
+	fmt.Println("reqs:", string(bys))
+	fmt.Println("---------------------------------------------")
+
+	reqMap := make(map[string][]int) // primaryTable --> req-index-id list:
 	for i, req := range reqs {
-		res, err := handleReadCommandRequest(deviceClient, req)
-		if err != nil {
-			driver.Logger.Infof("Read command failed. Cmd:%v err:%v \n", req.DeviceResourceName, err)
-			return responses, err
+
+		if _, ok := req.Attributes[PRIMARY_TABLE]; !ok {
+			return nil, errors.NewCommonEdgeX(errors.KindContractInvalid, fmt.Sprintf("attribute %s not exists", PRIMARY_TABLE), nil)
+		}
+		primaryTable := fmt.Sprintf("%v", req.Attributes[PRIMARY_TABLE])
+		primaryTable = strings.ToUpper(primaryTable)
+
+		if reqMap[primaryTable] == nil {
+			reqMap[primaryTable] = make([]int, 0)
 		}
 
-		responses[i] = res
+		reqMap[primaryTable] = append(reqMap[primaryTable], i)
+	}
+
+	sortByStartingAddr := func(reqIDList []int) []int {
+		sort.Slice(reqIDList, func(i, j int) bool {
+
+			reqA, reqB := reqs[reqIDList[i]], reqs[reqIDList[j]]
+			startingAddrA, _ := getReqStartingAddr(reqA)
+			startingAddrB, _ := getReqStartingAddr(reqB)
+
+			return startingAddrA < startingAddrB
+		})
+
+		return reqIDList
+	}
+
+	for primaryTable, reqIdxList := range reqMap {
+		sortedReqIdxList := sortByStartingAddr(reqIdxList)
+		fmt.Println(primaryTable, sortedReqIdxList)
+		responses, err = handleReadCommandRequests(primaryTable, deviceClient, reqs, responses, sortedReqIdxList)
+		if err != nil {
+			driver.Logger.Infof("Read commands failed. Cmd:%v err:%v \n", primaryTable, err)
+			return responses, err
+		}
+	}
+
+	// old
+	// handle command requests
+	// for i, req := range reqs {
+	// 	// if req.Attributes["stringRegisterSize"] != 0 {
+	// 	// 	req.Attributes["stringRegisterSize"] = 4
+	// 	// }
+	// 	bys, _ := json.Marshal(req)
+	// 	fmt.Println("\nreq: ", i, string(bys))
+	// 	res, err := handleReadCommandRequest(deviceClient, req)
+	// 	if err != nil {
+	// 		driver.Logger.Infof("Read command failed. Cmd:%v err:%v \n", req.DeviceResourceName, err)
+	// 		return responses, err
+	// 	}
+
+	// 	responses[i] = res
+	// }
+
+	return responses, nil
+}
+
+func handleReadCommandRequests(primaryTable string, deviceClient DeviceClient, reqs []sdkModel.CommandRequest, responses []*sdkModel.CommandValue, sortedReqIdxList []int) ([]*sdkModel.CommandValue, error) {
+	var response []byte
+	var result = &sdkModel.CommandValue{}
+	var err error
+
+	commandInfo, err := createCommandInfoForReqs(primaryTable, reqs, sortedReqIdxList)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("commandInfo : %+v", *commandInfo)
+
+	response, err = deviceClient.GetValue(commandInfo)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, idx := range sortedReqIdxList {
+		req := reqs[idx]
+		reqCmd, err := createCommandInfo(&req)
+		if err != nil {
+			return nil, err
+		}
+
+		left := reqCmd.StartingAddress - commandInfo.StartingAddress
+		right := left + reqCmd.Length
+
+		result, err = TransformDataBytesToResult(&req, response[left:right], reqCmd)
+
+		if err != nil {
+			return nil, err
+		} else {
+			driver.Logger.Infof("Read command finished. Cmd:%v, %v \n", req.DeviceResourceName, result)
+		}
+
+		responses[idx] = result
 	}
 
 	return responses, nil

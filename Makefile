@@ -63,11 +63,11 @@ vendor:
 
 .PHONY: run
 run:
-	@cd cmd && EDGEX_SECURITY_SECRET_STORE=false WRITABLE_LOGLEVEL=INFO DEVICE_PROFILESDIR=./res/profiles DEVICE_DEVICESDIR=./res/devices go run main.go -cp=consul.http://192.168.1.100:8500 --registry --overwrite --dev
+	@cd cmd && EDGEX_SECURITY_SECRET_STORE=false WRITABLE_LOGLEVEL=INFO DEVICE_PROFILESDIR=./res/profiles DEVICE_DEVICESDIR=./res/devices go run main.go -cp=consul.http://127.0.0.1:8500 --registry --overwrite --dev
 
 .PHONY: debug
 debug:
-	@cd cmd && EDGEX_SECURITY_SECRET_STORE=false WRITABLE_LOGLEVEL=INFO DEVICE_PROFILESDIR=./res/profiles DEVICE_DEVICESDIR=./res/devices dlv debug main.go -- -cp=consul.http://192.168.1.100:8500 --registry --overwrite --dev
+	@cd cmd && EDGEX_SECURITY_SECRET_STORE=false WRITABLE_LOGLEVEL=INFO DEVICE_PROFILESDIR=./res/profiles DEVICE_DEVICESDIR=./res/devices dlv debug main.go -- -cp=consul.http://127.0.0.1:8500 --registry --overwrite --dev
 
 .PHONY: simulator
 simulator:
