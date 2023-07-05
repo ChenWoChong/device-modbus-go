@@ -17,7 +17,7 @@
                 "DEVICE_DEVICESDIR": "./res/devices"
             },
             "args": [
-                "-cp=consul.http://192.168.1.100:8500",
+                "-cp=consul.http://127.0.0.1:8500",
                 "--registry",
                 "--overwrite",
                 "--dev"
