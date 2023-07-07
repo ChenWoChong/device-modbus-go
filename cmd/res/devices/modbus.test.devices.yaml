@@ -15,6 +15,10 @@ deviceList:
         UnitID: 1
         Timeout: 5
         IdleTimeout: 5
+        MaxDiscreteInputsPerRequest: 125
+        MaxCoilsPerRequest: 125
+        MaxInputRegistersPerRequest: 125
+        MaxHoldingRegistersPerRequest: 125
     autoEvents:
       - interval: 20s
         onChange: false

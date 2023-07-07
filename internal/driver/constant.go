@@ -63,3 +63,10 @@ var ValueTypeBitCountMap = map[string]uint16{
 	common.ValueTypeBool:   1,
 	common.ValueTypeString: 16,
 }
+
+var PrimaryTableMaxMap = map[string]string{
+	DISCRETES_INPUT:   "MaxDiscreteInputsPerRequest",
+	COILS:             "MaxCoilsPerRequest",
+	INPUT_REGISTERS:   "MaxInputRegistersPerRequest",
+	HOLDING_REGISTERS: "MaxHoldingRegistersPerRequest",
+}

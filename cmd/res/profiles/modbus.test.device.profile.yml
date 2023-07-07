@@ -47,6 +47,19 @@ deviceResources:
     maximum: 11
     defaultValue: "0"
 -
+  name: "HOLDING_REGISTERS_EXTRA_ATTRIBUTES"
+  isHidden: true
+  description: "controll the max length of reading"
+  attributes:
+    { primaryTable: "HOLDING_REGISTERS", startingAddress: 200}
+  properties:
+    valueType: "Int16"
+    readWrite: "RW"
+    scale: 1
+    minimum: 0
+    maximum: 11
+    defaultValue: "0"
+-
   name: "FanSpeed"
   isHidden: true
   description: "0-Low 1-Med 2-High 3-Auto 4-Top 5-Very Lo 7-VAM Super Hi 8-VAM Lo FreshUp 9-VAMHiFreshUp"
@@ -105,3 +118,4 @@ deviceCommands:
   - { deviceResource: "OperationMode", mappings: { "0":"Cool","1":"Heat","2":"Auto","3":"Dry","4":"HAUX","5":"Fan","6":"HH","8":"VAM Auto","9":"VAM Bypass","10":"VAM Heat","11":"VAM Normal"} }
   - { deviceResource: "FanSpeed", mappings: { "0":"Low","1":"Med","2":"High","3":"Auto","4":"Top","5":"Very Lo","7":"VAM Super Hi","8":"VAM Lo FreshUp","9":"VAMHiFreshUp"} }
   - { deviceResource: "Temperature" }
+  - { deviceResource: "HOLDING_REGISTERS_EXTRA_ATTRIBUTES" }

@@ -10,6 +10,7 @@ package driver
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -149,8 +150,17 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 	}
 
 	for primaryTable, reqIdxList := range reqMap {
-		responses, err = handleReadCommandRequests(deviceClient, reqs, responses, reqIdxList)
-		if err != nil {
+
+		var quantity float64
+		properties := protocols["modbus-tcp"]
+		if properties != nil {
+			tt := PrimaryTableMaxMap[primaryTable]
+			if value, ok := properties[tt]; ok {
+				quantity = value.(float64)
+			}
+		}
+
+		if err := handleReadCommandRequests(deviceClient, reqs, responses, reqIdxList, uint16(quantity)); err != nil {
 			driver.Logger.Infof("Read commands failed. Cmd:%v err:%v \n", primaryTable, err)
 			return responses, err
 		}
@@ -159,74 +169,110 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 	return responses, nil
 }
 
-func handleReadCommandRequests(deviceClient DeviceClient, reqs []sdkModel.CommandRequest, responses []*sdkModel.CommandValue, reqIdxList []int) ([]*sdkModel.CommandValue, error) {
-	var response []byte
-	var result = &sdkModel.CommandValue{}
-	var err error
+func handleReadCommandRequests(deviceClient DeviceClient, reqs []sdkModel.CommandRequest, responses []*sdkModel.CommandValue, reqIdxList []int, quantity uint16) error {
 
-	var commandInfoList []*CommandInfo
+	// order reqIdxList by StartingAddress form min to max .
+	fmt.Printf("reqIdxList: %v", reqIdxList)
+	sort.Slice(reqIdxList, func(i, j int) bool {
+		cmdA, _ := createCommandInfo(&reqs[reqIdxList[i]])
+		cmdB, _ := createCommandInfo(&reqs[reqIdxList[j]])
+		return cmdA.StartingAddress < cmdB.StartingAddress
+	})
+	fmt.Printf(",sorted reqIdxList: %v\n", reqIdxList)
 
-	for _, idx := range reqIdxList {
-		req := reqs[idx]
-		commandInfo, err := createCommandInfo(&req)
-		commandInfoList = append(commandInfoList, commandInfo)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	var minIndex = 0
-	var minStartingAddress uint16 = 256
-	var maxIndex = 0
-	var maxStartingAddress uint16 = 0
-
-	for i, ci := range commandInfoList {
-		if ci.StartingAddress < minStartingAddress {
-			minIndex = i
-			minStartingAddress = ci.StartingAddress
-		}
-		if ci.StartingAddress > maxStartingAddress {
-			maxIndex = i
-			maxStartingAddress = ci.StartingAddress
-		}
-	}
-
-	length := (commandInfoList[maxIndex].StartingAddress - commandInfoList[minIndex].StartingAddress) +
-		commandInfoList[maxIndex].Length
-
-	newCommandInfo := &CommandInfo{
-		PrimaryTable:    commandInfoList[minIndex].PrimaryTable,
-		StartingAddress: commandInfoList[minIndex].StartingAddress,
-		// how many register need to read
-		Length: length,
-	}
-
-	fmt.Printf("CommandInfo : %+v\n", *newCommandInfo)
-
-	response, err = deviceClient.GetValue(newCommandInfo)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, idx := range reqIdxList {
-		req := reqs[idx]
-		commandInfo := commandInfoList[idx]
-		startingAddress := commandInfo.StartingAddress - newCommandInfo.StartingAddress
-		sliceResponse := response[startingAddress*2 : (startingAddress+commandInfo.Length)*2]
-		driver.Logger.Debug(fmt.Sprintf("Modbus client Request's CommandInfo %v", commandInfo))
-		driver.Logger.Debug(fmt.Sprintf("Modbus client Response's results %v", sliceResponse))
-		result, err = TransformDataBytesToResult(&req, sliceResponse, commandInfo)
-
-		if err != nil {
-			return nil, err
+	// create commandInfoList By sorted reqIdxList
+	commandInfoList := make([]*CommandInfo, len(reqIdxList))
+	for i, idx := range reqIdxList {
+		if cmd, err := createCommandInfo(&reqs[idx]); err != nil {
+			return err
 		} else {
-			driver.Logger.Infof("Read command finished. Cmd:%v, %v \n", req.DeviceResourceName, result)
+			commandInfoList[i] = cmd
 		}
-
-		responses[idx] = result
 	}
 
-	return responses, nil
+	minIndex, maxIndex := 0, len(commandInfoList)-1
+
+	// getLength: get the length from the min-req-startingAddress to max-req-startingAddress
+	getLength := func(minIndex, maxIndex int) (length uint16) {
+		return (commandInfoList[maxIndex].StartingAddress - commandInfoList[minIndex].StartingAddress) + commandInfoList[maxIndex].Length
+	}
+
+	// getResponeFromCommandInfoList: get Respone of CommandInfoList
+	getResponeFromCommandInfoList := func(minIndex, maxIndex int) (err error) {
+
+		length := getLength(minIndex, maxIndex)
+		newCommandInfo := &CommandInfo{
+			PrimaryTable:    commandInfoList[minIndex].PrimaryTable,
+			StartingAddress: commandInfoList[minIndex].StartingAddress,
+			// how many register need to read
+			Length: length,
+		}
+
+		fmt.Printf("CommandInfo : %+v\n", *newCommandInfo)
+
+		response, err := deviceClient.GetValue(newCommandInfo)
+		if err != nil {
+			return err
+		}
+
+		for i:=minIndex; i<=maxIndex; i++ {
+			req := reqs[reqIdxList[i]]
+			commandInfo := commandInfoList[i]
+			startingAddress := commandInfo.StartingAddress - newCommandInfo.StartingAddress
+			left, right := startingAddress*2, (startingAddress+commandInfo.Length)*2
+			if int(left) > len(response) || int(right) > len(response) {
+				return err
+			}
+			sliceResponse := response[left:right]
+			driver.Logger.Debug(fmt.Sprintf("Modbus client Request's CommandInfo %v", commandInfo))
+			driver.Logger.Debug(fmt.Sprintf("Modbus client Response's results %v", sliceResponse))
+
+			result, err := TransformDataBytesToResult(&req, sliceResponse, commandInfo)
+			if err != nil {
+				return err
+			} else {
+				driver.Logger.Infof("Read command finished. Cmd:%v, %v \n", req.DeviceResourceName, result)
+			}
+
+			responses[reqIdxList[i]] = result
+		}
+
+		return nil
+	}
+
+	// If quantity is zero, merge all commands to one command
+	if quantity == 0 {
+		return getResponeFromCommandInfoList(minIndex, maxIndex)
+	}
+
+	// Check whether per length is greater than quantity.
+	for i := range reqIdxList {
+		if commandInfoList[i].Length > quantity {
+			return errors.NewCommonEdgeX(errors.KindCommunicationError, fmt.Sprintf("per length is greater than quantity %d > %d", commandInfoList[i].Length, quantity), nil)
+		}
+	}
+
+	// Else if quantity > 0,  split commands within quantity.
+	for right := 0; right < len(reqIdxList); right++ {
+		left := right
+		curLength := getLength(left, right)
+
+		for curLength <= quantity && right+1 < len(reqIdxList) {
+			curLength = getLength(left, right+1)
+			right++
+		}
+
+		// 如果curLength > quantity, 则需要减掉回退一个
+		if curLength > quantity {
+			right--
+		}
+
+		if err := getResponeFromCommandInfoList(left, right); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func handleReadCommandRequest(deviceClient DeviceClient, req sdkModel.CommandRequest) (*sdkModel.CommandValue, error) {
