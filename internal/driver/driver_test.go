@@ -7,6 +7,9 @@
 package driver
 
 import (
+	sdkModel "github.com/edgexfoundry/device-sdk-go/v3/pkg/models"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"strings"
 	"testing"
 
@@ -43,3 +46,32 @@ func TestLockAddressWithAddressCountUnderLimit(t *testing.T) {
 		t.Errorf("Unexpect result, address should be lock successfully, %v", err)
 	}
 }
+
+func TestCreateCommandInfo(t *testing.T) {
+	req := sdkModel.CommandRequest{
+		DeviceResourceName: "OperationMode",
+		// Attributes is a key/value map to represent the attributes of the Device Resource
+		Attributes: make(map[string]interface{}),
+		// Type is the data type of the Device Resource
+		Type: "Int16",
+	}
+	expected := &CommandInfo{
+		PrimaryTable:    "HOLDING_REGISTERS",
+		StartingAddress: 1,
+		ValueType:       "Int16",
+		// how many register need to read
+		Length:     1,
+		IsByteSwap: false,
+		IsWordSwap: false,
+		RawType:    "Int16",
+	}
+	req.Attributes["primaryTable"] = "HOLDING_REGISTERS"
+	req.Attributes["startingAddress"] = 1
+
+	commandInfo, err := createCommandInfo(&req)
+	require.NoError(t, err)
+
+	assert.Equal(t, expected, commandInfo)
+}
+
+    

@@ -10,7 +10,6 @@ package driver
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -129,7 +128,7 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 	defer func() { _ = deviceClient.CloseConnection() }()
 	bys, _ := json.Marshal(reqs)
 
-	fmt.Println("\n---------------------------------------------\n")
+	fmt.Println("\n---------------------------------------------")
 	fmt.Println("reqs:", string(bys))
 	fmt.Println("---------------------------------------------")
 
@@ -149,77 +148,74 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 		reqMap[primaryTable] = append(reqMap[primaryTable], i)
 	}
 
-	sortByStartingAddr := func(reqIDList []int) []int {
-		sort.Slice(reqIDList, func(i, j int) bool {
-
-			reqA, reqB := reqs[reqIDList[i]], reqs[reqIDList[j]]
-			startingAddrA, _ := getReqStartingAddr(reqA)
-			startingAddrB, _ := getReqStartingAddr(reqB)
-
-			return startingAddrA < startingAddrB
-		})
-
-		return reqIDList
-	}
-
 	for primaryTable, reqIdxList := range reqMap {
-		sortedReqIdxList := sortByStartingAddr(reqIdxList)
-		fmt.Println(primaryTable, sortedReqIdxList)
-		responses, err = handleReadCommandRequests(primaryTable, deviceClient, reqs, responses, sortedReqIdxList)
+		responses, err = handleReadCommandRequests(deviceClient, reqs, responses, reqIdxList)
 		if err != nil {
 			driver.Logger.Infof("Read commands failed. Cmd:%v err:%v \n", primaryTable, err)
 			return responses, err
 		}
 	}
 
-	// old
-	// handle command requests
-	// for i, req := range reqs {
-	// 	// if req.Attributes["stringRegisterSize"] != 0 {
-	// 	// 	req.Attributes["stringRegisterSize"] = 4
-	// 	// }
-	// 	bys, _ := json.Marshal(req)
-	// 	fmt.Println("\nreq: ", i, string(bys))
-	// 	res, err := handleReadCommandRequest(deviceClient, req)
-	// 	if err != nil {
-	// 		driver.Logger.Infof("Read command failed. Cmd:%v err:%v \n", req.DeviceResourceName, err)
-	// 		return responses, err
-	// 	}
-
-	// 	responses[i] = res
-	// }
-
 	return responses, nil
 }
 
-func handleReadCommandRequests(primaryTable string, deviceClient DeviceClient, reqs []sdkModel.CommandRequest, responses []*sdkModel.CommandValue, sortedReqIdxList []int) ([]*sdkModel.CommandValue, error) {
+func handleReadCommandRequests(deviceClient DeviceClient, reqs []sdkModel.CommandRequest, responses []*sdkModel.CommandValue, reqIdxList []int) ([]*sdkModel.CommandValue, error) {
 	var response []byte
 	var result = &sdkModel.CommandValue{}
 	var err error
 
-	commandInfo, err := createCommandInfoForReqs(primaryTable, reqs, sortedReqIdxList)
-	if err != nil {
-		return nil, err
-	}
+	var commandInfoList []*CommandInfo
 
-	fmt.Printf("commandInfo : %+v", *commandInfo)
-
-	response, err = deviceClient.GetValue(commandInfo)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, idx := range sortedReqIdxList {
+	for _, idx := range reqIdxList {
 		req := reqs[idx]
-		reqCmd, err := createCommandInfo(&req)
+		commandInfo, err := createCommandInfo(&req)
+		commandInfoList = append(commandInfoList, commandInfo)
 		if err != nil {
 			return nil, err
 		}
+	}
 
-		left := reqCmd.StartingAddress - commandInfo.StartingAddress
-		right := left + reqCmd.Length
+	var minIndex = 0
+	var minStartingAddress uint16 = 256
+	var maxIndex = 0
+	var maxStartingAddress uint16 = 0
 
-		result, err = TransformDataBytesToResult(&req, response[left:right], reqCmd)
+	for i, ci := range commandInfoList {
+		if ci.StartingAddress < minStartingAddress {
+			minIndex = i
+			minStartingAddress = ci.StartingAddress
+		}
+		if ci.StartingAddress > maxStartingAddress {
+			maxIndex = i
+			maxStartingAddress = ci.StartingAddress
+		}
+	}
+
+	length := (commandInfoList[maxIndex].StartingAddress - commandInfoList[minIndex].StartingAddress) +
+		commandInfoList[maxIndex].Length
+
+	newCommandInfo := &CommandInfo{
+		PrimaryTable:    commandInfoList[minIndex].PrimaryTable,
+		StartingAddress: commandInfoList[minIndex].StartingAddress,
+		// how many register need to read
+		Length: length,
+	}
+
+	fmt.Printf("CommandInfo : %+v\n", *newCommandInfo)
+
+	response, err = deviceClient.GetValue(newCommandInfo)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, idx := range reqIdxList {
+		req := reqs[idx]
+		commandInfo := commandInfoList[idx]
+		startingAddress := commandInfo.StartingAddress - newCommandInfo.StartingAddress
+		sliceResponse := response[startingAddress*2 : (startingAddress+commandInfo.Length)*2]
+		driver.Logger.Debug(fmt.Sprintf("Modbus client Request's CommandInfo %v", commandInfo))
+		driver.Logger.Debug(fmt.Sprintf("Modbus client Response's results %v", sliceResponse))
+		result, err = TransformDataBytesToResult(&req, sliceResponse, commandInfo)
 
 		if err != nil {
 			return nil, err
