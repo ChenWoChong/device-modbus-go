@@ -19,6 +19,7 @@ deviceList:
         MaxCoilsPerRequest: 125
         MaxInputRegistersPerRequest: 125
         MaxHoldingRegistersPerRequest: 125
+        ConcurrentRequest: true
     autoEvents:
       - interval: 20s
         onChange: false

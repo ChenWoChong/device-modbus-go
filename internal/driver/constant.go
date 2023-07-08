@@ -39,6 +39,8 @@ const (
 	// STRING_REGISTER_SIZE  E.g. "abcd" need 4 bytes as is 2 registers(2 words), so STRING_REGISTER_SIZE=2
 	STRING_REGISTER_SIZE   = "stringRegisterSize"
 	SERVICE_STOP_WAIT_TIME = 1
+
+	ConcurrentRequest = "ConcurrentRequest"
 )
 
 var PrimaryTableBitCountMap = map[string]uint16{
@@ -64,6 +66,7 @@ var ValueTypeBitCountMap = map[string]uint16{
 	common.ValueTypeString: 16,
 }
 
+// PrimaryTable type --> max per Request
 var PrimaryTableMaxMap = map[string]string{
 	DISCRETES_INPUT:   "MaxDiscreteInputsPerRequest",
 	COILS:             "MaxCoilsPerRequest",

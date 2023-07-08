@@ -20,6 +20,7 @@ import (
 	"github.com/edgexfoundry/go-mod-core-contracts/v3/clients/logger"
 	"github.com/edgexfoundry/go-mod-core-contracts/v3/errors"
 	"github.com/edgexfoundry/go-mod-core-contracts/v3/models"
+	"golang.org/x/sync/errgroup"
 )
 
 var once sync.Once
@@ -149,21 +150,36 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 		reqMap[primaryTable] = append(reqMap[primaryTable], i)
 	}
 
-	for primaryTable, reqIdxList := range reqMap {
+	eg := new(errgroup.Group)
+
+	for primaryTable := range reqMap {
 
 		var quantity float64
 		properties := protocols["modbus-tcp"]
 		if properties != nil {
-			tt := PrimaryTableMaxMap[primaryTable]
-			if value, ok := properties[tt]; ok {
+			maxPerReq := PrimaryTableMaxMap[primaryTable]
+			if value, ok := properties[maxPerReq]; ok {
 				quantity = value.(float64)
 			}
 		}
 
-		if err := handleReadCommandRequests(deviceClient, reqs, responses, reqIdxList, uint16(quantity)); err != nil {
-			driver.Logger.Infof("Read commands failed. Cmd:%v err:%v \n", primaryTable, err)
-			return responses, err
+		// order reqIdxList by StartingAddress form min to max .
+		reqIdxList := reqMap[primaryTable]
+		if isConcurrent, ok := properties[ConcurrentRequest]; ok && isConcurrent.(bool) {
+			eg.Go(func() error {
+				return handleReadCommandRequests(deviceClient, reqs, responses, reqIdxList, uint16(quantity))
+			})
+		} else {
+			if err := handleReadCommandRequests(deviceClient, reqs, responses, reqIdxList, uint16(quantity)); err != nil {
+				driver.Logger.Infof("Read commands failed. Cmd:%v err:%v \n", primaryTable, err)
+				return responses, err
+			}
 		}
+	}
+
+	if err := eg.Wait(); err != nil {
+		driver.Logger.Infof("Read commands failed.  err:%v \n", err)
+		return responses, err
 	}
 
 	return responses, nil
@@ -215,7 +231,7 @@ func handleReadCommandRequests(deviceClient DeviceClient, reqs []sdkModel.Comman
 			return err
 		}
 
-		for i:=minIndex; i<=maxIndex; i++ {
+		for i := minIndex; i <= maxIndex; i++ {
 			req := reqs[reqIdxList[i]]
 			commandInfo := commandInfoList[i]
 			startingAddress := commandInfo.StartingAddress - newCommandInfo.StartingAddress
@@ -246,18 +262,18 @@ func handleReadCommandRequests(deviceClient DeviceClient, reqs []sdkModel.Comman
 	}
 
 	// Check whether per length is greater than quantity.
-	for i := range reqIdxList {
+	for i := range commandInfoList {
 		if commandInfoList[i].Length > quantity {
 			return errors.NewCommonEdgeX(errors.KindCommunicationError, fmt.Sprintf("per length is greater than quantity %d > %d", commandInfoList[i].Length, quantity), nil)
 		}
 	}
 
 	// Else if quantity > 0,  split commands within quantity.
-	for right := 0; right < len(reqIdxList); right++ {
+	for right := 0; right < len(commandInfoList); right++ {
 		left := right
 		curLength := getLength(left, right)
 
-		for curLength <= quantity && right+1 < len(reqIdxList) {
+		for curLength <= quantity && right+1 < len(commandInfoList) {
 			curLength = getLength(left, right+1)
 			right++
 		}
