@@ -60,6 +60,45 @@ deviceResources:
     maximum: 11
     defaultValue: "0"
 -
+  name: "HOLDING_REGISTERS_EXTRA_ATTRIBUTES1"
+  isHidden: true
+  description: "controll the max length of reading1"
+  attributes:
+    { primaryTable: "HOLDING_REGISTERS", startingAddress: 201}
+  properties:
+    valueType: "Int16"
+    readWrite: "RW"
+    scale: 1
+    minimum: 0
+    maximum: 11
+    defaultValue: "0"
+-
+  name: "HOLDING_REGISTERS_EXTRA_ATTRIBUTES2"
+  isHidden: true
+  description: "controll the max length of reading2"
+  attributes:
+    { primaryTable: "HOLDING_REGISTERS", startingAddress: 11}
+  properties:
+    valueType: "Int32"
+    readWrite: "RW"
+    scale: 1
+    minimum: 0
+    maximum: 11
+    defaultValue: "0"
+-
+  name: "HOLDING_REGISTERS_EXTRA_ATTRIBUTES3"
+  isHidden: true
+  description: "controll the max length of reading3"
+  attributes:
+    { primaryTable: "HOLDING_REGISTERS", startingAddress: 13}
+  properties:
+    valueType: "Int16"
+    readWrite: "RW"
+    scale: 1
+    minimum: 0
+    maximum: 11
+    defaultValue: "0"
+-
   name: "FanSpeed"
   isHidden: true
   description: "0-Low 1-Med 2-High 3-Auto 4-Top 5-Very Lo 7-VAM Super Hi 8-VAM Lo FreshUp 9-VAMHiFreshUp"
@@ -119,3 +158,6 @@ deviceCommands:
   - { deviceResource: "FanSpeed", mappings: { "0":"Low","1":"Med","2":"High","3":"Auto","4":"Top","5":"Very Lo","7":"VAM Super Hi","8":"VAM Lo FreshUp","9":"VAMHiFreshUp"} }
   - { deviceResource: "Temperature" }
   - { deviceResource: "HOLDING_REGISTERS_EXTRA_ATTRIBUTES" }
+  - { deviceResource: "HOLDING_REGISTERS_EXTRA_ATTRIBUTES1" }
+  - { deviceResource: "HOLDING_REGISTERS_EXTRA_ATTRIBUTES2" }
+  - { deviceResource: "HOLDING_REGISTERS_EXTRA_ATTRIBUTES3" }

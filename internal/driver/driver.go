@@ -121,10 +121,27 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 		return responses, err
 	}
 
-	err = deviceClient.OpenConnection()
-	if err != nil {
-		driver.Logger.Infof("Read command OpenConnection failed. err:%v \n", err)
-		return responses, err
+	properties := protocols[ProtocolTCP]
+	if properties == nil {
+		properties = make(models.ProtocolProperties)
+	}
+
+	// 判断是否启用重连
+	if enableReconnet, ok := properties[Reconnect_After_Consecutive_Tries]; ok && enableReconnet.(bool) {
+		for i := 0; i < Default_Retry_Connect_Count; i++ {
+			err = deviceClient.OpenConnection()
+			if err == nil {
+				break
+			} else if i == Default_Retry_Connect_Count-1 {
+				return responses, err
+			}
+		}
+	} else {
+		err = deviceClient.OpenConnection()
+		if err != nil {
+			driver.Logger.Infof("Read command OpenConnection failed. err:%v \n", err)
+			return responses, err
+		}
 	}
 
 	defer func() { _ = deviceClient.CloseConnection() }()
@@ -137,6 +154,20 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 	reqMap := make(map[string][]int) // primaryTable --> req-index-id list:
 	for i, req := range reqs {
 
+		//  Zero based address
+		if isZerobasedAddressing, ok := properties[Zero_Based_Addressing]; ok && !isZerobasedAddressing.(bool) {
+			if _, ok := req.Attributes[STARTING_ADDRESS]; !ok {
+				return nil, errors.NewCommonEdgeX(errors.KindContractInvalid, fmt.Sprintf("attribute %s not exists", STARTING_ADDRESS), nil)
+			}
+			startingAddress, err := castStartingAddress(req.Attributes[STARTING_ADDRESS])
+			if err != nil {
+				return nil, errors.NewCommonEdgeX(errors.Kind(err), fmt.Sprintf("fail to cast %s", STARTING_ADDRESS), err)
+			}
+
+			req.Attributes[STARTING_ADDRESS] = startingAddress + 1
+		}
+
+		// Sort by primaryTable
 		if _, ok := req.Attributes[PRIMARY_TABLE]; !ok {
 			return nil, errors.NewCommonEdgeX(errors.KindContractInvalid, fmt.Sprintf("attribute %s not exists", PRIMARY_TABLE), nil)
 		}
@@ -155,7 +186,7 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 	for primaryTable := range reqMap {
 
 		var quantity float64
-		properties := protocols["modbus-tcp"]
+		properties := protocols[ProtocolTCP]
 		if properties != nil {
 			maxPerReq := PrimaryTableMaxMap[primaryTable]
 			if value, ok := properties[maxPerReq]; ok {
@@ -163,14 +194,13 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 			}
 		}
 
-		// order reqIdxList by StartingAddress form min to max .
 		reqIdxList := reqMap[primaryTable]
-		if isConcurrent, ok := properties[ConcurrentRequest]; ok && isConcurrent.(bool) {
+		if isConcurrent, ok := properties[Concurrent_Request]; ok && isConcurrent.(bool) {
 			eg.Go(func() error {
-				return handleReadCommandRequests(deviceClient, reqs, responses, reqIdxList, uint16(quantity))
+				return handleReadCommandRequests(deviceClient, protocols, reqs, responses, reqIdxList, uint16(quantity))
 			})
 		} else {
-			if err := handleReadCommandRequests(deviceClient, reqs, responses, reqIdxList, uint16(quantity)); err != nil {
+			if err := handleReadCommandRequests(deviceClient, protocols, reqs, responses, reqIdxList, uint16(quantity)); err != nil {
 				driver.Logger.Infof("Read commands failed. Cmd:%v err:%v \n", primaryTable, err)
 				return responses, err
 			}
@@ -185,13 +215,29 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 	return responses, nil
 }
 
-func handleReadCommandRequests(deviceClient DeviceClient, reqs []sdkModel.CommandRequest, responses []*sdkModel.CommandValue, reqIdxList []int, quantity uint16) error {
+func handleReadCommandRequests(deviceClient DeviceClient, protocols map[string]models.ProtocolProperties, reqs []sdkModel.CommandRequest, responses []*sdkModel.CommandValue, reqIdxList []int, quantity uint16) error {
+
+	var allowSpanGaps bool // allowSpanGaps
+	var maxRetryCount int  // maxRetryCount
+	properties := protocols[ProtocolTCP]
+	if properties != nil {
+		if allow, ok := properties[Allow_Span_Gaps]; ok {
+			allowSpanGaps = allow.(bool)
+		}
+		if count, ok := properties[Max_Retry_Count]; ok {
+			maxRetryCount = int(count.(float64))
+		}
+		if maxRetryCount == 0 {
+			maxRetryCount = 1
+		}
+	}
 
 	// order reqIdxList by StartingAddress form min to max .
 	fmt.Printf("reqIdxList: %v", reqIdxList)
 	sort.Slice(reqIdxList, func(i, j int) bool {
-		cmdA, _ := createCommandInfo(&reqs[reqIdxList[i]])
-		cmdB, _ := createCommandInfo(&reqs[reqIdxList[j]])
+		reqA, reqB := &reqs[reqIdxList[i]], &reqs[reqIdxList[j]]
+		cmdA, _ := createCommandInfo(reqA)
+		cmdB, _ := createCommandInfo(reqB)
 		return cmdA.StartingAddress < cmdB.StartingAddress
 	})
 	fmt.Printf(",sorted reqIdxList: %v\n", reqIdxList)
@@ -226,9 +272,15 @@ func handleReadCommandRequests(deviceClient DeviceClient, reqs []sdkModel.Comman
 
 		fmt.Printf("CommandInfo : %+v\n", *newCommandInfo)
 
-		response, err := deviceClient.GetValue(newCommandInfo)
-		if err != nil {
-			return err
+		// maxRetryCount
+		var response []byte
+		for i := 0; i < maxRetryCount; i++ {
+			response, err = deviceClient.GetValue(newCommandInfo)
+			if err == nil {
+				break
+			} else if i == maxRetryCount-1 {
+				return err
+			}
 		}
 
 		for i := minIndex; i <= maxIndex; i++ {
@@ -256,16 +308,42 @@ func handleReadCommandRequests(deviceClient DeviceClient, reqs []sdkModel.Comman
 		return nil
 	}
 
-	// If quantity is zero, merge all commands to one command
-	if quantity == 0 {
+	// If quantity is zero or allowSpanGaps, merge all to one command
+	if quantity == 0 && allowSpanGaps {
 		return getResponeFromCommandInfoList(minIndex, maxIndex)
 	}
 
 	// Check whether per length is greater than quantity.
 	for i := range commandInfoList {
-		if commandInfoList[i].Length > quantity {
+		if quantity > 0 && commandInfoList[i].Length > quantity {
 			return errors.NewCommonEdgeX(errors.KindCommunicationError, fmt.Sprintf("per length is greater than quantity %d > %d", commandInfoList[i].Length, quantity), nil)
 		}
+	}
+
+	isSpanGaps := func(left, right int) bool {
+		if left < 0 || left > right || right >= len(commandInfoList) {
+			return false
+		}
+
+		leftCmd, rightCmd := commandInfoList[left], commandInfoList[right]
+
+		// only one command, or allow spanGap
+		if left == right || allowSpanGaps {
+			return true
+		}
+
+		if leftCmd.StartingAddress+leftCmd.Length == rightCmd.StartingAddress {
+			return true
+		}
+
+		return false
+	}
+
+	allowQuantity := func(length, quantity uint16) bool {
+		if quantity == 0 {
+			return true
+		}
+		return length <= quantity
 	}
 
 	// Else if quantity > 0,  split commands within quantity.
@@ -273,13 +351,13 @@ func handleReadCommandRequests(deviceClient DeviceClient, reqs []sdkModel.Comman
 		left := right
 		curLength := getLength(left, right)
 
-		for curLength <= quantity && right+1 < len(commandInfoList) {
+		for isSpanGaps(left, right) && allowQuantity(curLength, quantity) && right+1 < len(commandInfoList) {
 			curLength = getLength(left, right+1)
 			right++
 		}
 
 		// 如果curLength > quantity, 则需要减掉回退一个
-		if curLength > quantity {
+		if !allowQuantity(curLength, quantity) || !isSpanGaps(left, right) {
 			right--
 		}
 

@@ -20,6 +20,10 @@ deviceList:
         MaxInputRegistersPerRequest: 125
         MaxHoldingRegistersPerRequest: 125
         ConcurrentRequest: true
+        ZerobasedAddressing: false
+        ReconnectAfterConsecutiveTries: true
+        AllowSpanGaps: false
+        MaxRetryCount: 3
     autoEvents:
       - interval: 20s
         onChange: false

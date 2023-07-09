@@ -40,7 +40,12 @@ const (
 	STRING_REGISTER_SIZE   = "stringRegisterSize"
 	SERVICE_STOP_WAIT_TIME = 1
 
-	ConcurrentRequest = "ConcurrentRequest"
+	Concurrent_Request                = "ConcurrentRequest"
+	Zero_Based_Addressing             = "ZerobasedAddressing"
+	Allow_Span_Gaps                   = "AllowSpanGaps"
+	Reconnect_After_Consecutive_Tries = "ReconnectAfterConsecutiveTries"
+	Max_Retry_Count                   = "MaxRetryCount"
+	Default_Retry_Connect_Count       = 3
 )
 
 var PrimaryTableBitCountMap = map[string]uint16{
