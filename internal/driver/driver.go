@@ -125,6 +125,7 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 	if properties == nil {
 		properties = make(models.ProtocolProperties)
 	}
+	driver.Logger.Debugf("Read command properties: %v \n", properties)
 
 	// 判断是否启用重连
 	if enableReconnet, ok := properties[Reconnect_After_Consecutive_Tries]; ok && enableReconnet.(bool) {
@@ -151,21 +152,16 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 	fmt.Println("reqs:", string(bys))
 	fmt.Println("---------------------------------------------")
 
+	//  Zero based address
+	var isZerobasedAddressing bool
+	if isZero, ok := properties[Zero_Based_Addressing]; ok {
+		isZerobasedAddressing = isZero.(bool)
+	} else {
+		isZerobasedAddressing = false
+	}
+
 	reqMap := make(map[string][]int) // primaryTable --> req-index-id list:
 	for i, req := range reqs {
-
-		//  Zero based address
-		if isZerobasedAddressing, ok := properties[Zero_Based_Addressing]; ok && !isZerobasedAddressing.(bool) {
-			if _, ok := req.Attributes[STARTING_ADDRESS]; !ok {
-				return nil, errors.NewCommonEdgeX(errors.KindContractInvalid, fmt.Sprintf("attribute %s not exists", STARTING_ADDRESS), nil)
-			}
-			startingAddress, err := castStartingAddress(req.Attributes[STARTING_ADDRESS])
-			if err != nil {
-				return nil, errors.NewCommonEdgeX(errors.Kind(err), fmt.Sprintf("fail to cast %s", STARTING_ADDRESS), err)
-			}
-
-			req.Attributes[STARTING_ADDRESS] = startingAddress + 1
-		}
 
 		// Sort by primaryTable
 		if _, ok := req.Attributes[PRIMARY_TABLE]; !ok {
@@ -197,10 +193,10 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 		reqIdxList := reqMap[primaryTable]
 		if isConcurrent, ok := properties[Concurrent_Request]; ok && isConcurrent.(bool) {
 			eg.Go(func() error {
-				return handleReadCommandRequests(deviceClient, protocols, reqs, responses, reqIdxList, uint16(quantity))
+				return handleReadCommandRequests(deviceClient, protocols, reqs, responses, reqIdxList, uint16(quantity), isZerobasedAddressing)
 			})
 		} else {
-			if err := handleReadCommandRequests(deviceClient, protocols, reqs, responses, reqIdxList, uint16(quantity)); err != nil {
+			if err := handleReadCommandRequests(deviceClient, protocols, reqs, responses, reqIdxList, uint16(quantity), isZerobasedAddressing); err != nil {
 				driver.Logger.Infof("Read commands failed. Cmd:%v err:%v \n", primaryTable, err)
 				return responses, err
 			}
@@ -215,7 +211,7 @@ func (d *Driver) HandleReadCommands(deviceName string, protocols map[string]mode
 	return responses, nil
 }
 
-func handleReadCommandRequests(deviceClient DeviceClient, protocols map[string]models.ProtocolProperties, reqs []sdkModel.CommandRequest, responses []*sdkModel.CommandValue, reqIdxList []int, quantity uint16) error {
+func handleReadCommandRequests(deviceClient DeviceClient, protocols map[string]models.ProtocolProperties, reqs []sdkModel.CommandRequest, responses []*sdkModel.CommandValue, reqIdxList []int, quantity uint16, isZerobasedAddressing bool) error {
 
 	var allowSpanGaps bool // allowSpanGaps
 	var maxRetryCount int  // maxRetryCount
@@ -245,11 +241,17 @@ func handleReadCommandRequests(deviceClient DeviceClient, protocols map[string]m
 	// create commandInfoList By sorted reqIdxList
 	commandInfoList := make([]*CommandInfo, len(reqIdxList))
 	for i, idx := range reqIdxList {
-		if cmd, err := createCommandInfo(&reqs[idx]); err != nil {
+		cmd, err := createCommandInfo(&reqs[idx])
+		if err != nil {
 			return err
-		} else {
-			commandInfoList[i] = cmd
 		}
+
+		// Not zero, StartingAddress add one
+		if !isZerobasedAddressing {
+			cmd.StartingAddress++
+		}
+
+		commandInfoList[i] = cmd
 	}
 
 	minIndex, maxIndex := 0, len(commandInfoList)-1
